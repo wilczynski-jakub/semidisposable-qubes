@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="232" viewBox="0 0 680 232" role="img">
+<title>AppVM, DispVM and semidisposable VM</title>
+<desc>What happens to your work and to an infection after shutting down each type of VM.</desc>
+<style>
+  text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; }
+  .row-label { font-size: 14px; font-weight: 600; fill: #1f2328; }
+  .neutral rect { fill: #F1EFE8; stroke: #5F5E5A; }
+  .neutral text { fill: #444441; }
+  .good rect { fill: #E1F5EE; stroke: #0F6E56; }
+  .good text { fill: #085041; }
+  .bad rect { fill: #FAECE7; stroke: #993C1D; }
+  .bad text { fill: #712B13; }
+  rect { stroke-width: 0.75; }
+  @media (prefers-color-scheme: dark) {
+    .row-label { fill: #e6edf3; }
+    .neutral rect { fill: #444441; stroke: #B4B2A9; }
+    .neutral text { fill: #F1EFE8; }
+    .good rect { fill: #085041; stroke: #5DCAA5; }
+    .good text { fill: #E1F5EE; }
+    .bad rect { fill: #712B13; stroke: #F0997B; }
+    .bad text { fill: #FAECE7; }
+  }
+</style>
+<text class="row-label" x="40" y="62" dominant-baseline="central">AppVM</text>
+<g class="neutral"><rect x="165" y="40" width="105" height="44" rx="4"/><text x="217" y="62" text-anchor="middle" dominant-baseline="central">Work</text></g>
+<g class="neutral"><rect x="285" y="40" width="105" height="44" rx="4"/><text x="337" y="62" text-anchor="middle" dominant-baseline="central">Shutdown</text></g>
+<g class="good"><rect x="405" y="40" width="105" height="44" rx="4"/><text x="457" y="62" text-anchor="middle" dominant-baseline="central">Work kept</text></g>
+<g class="bad"><rect x="525" y="40" width="105" height="44" rx="4"/><text x="577" y="62" text-anchor="middle" dominant-baseline="central">Malware stays</text></g>
+<text class="row-label" x="40" y="126" dominant-baseline="central">DispVM</text>
+<g class="neutral"><rect x="165" y="104" width="105" height="44" rx="4"/><text x="217" y="126" text-anchor="middle" dominant-baseline="central">Work</text></g>
+<g class="neutral"><rect x="285" y="104" width="105" height="44" rx="4"/><text x="337" y="126" text-anchor="middle" dominant-baseline="central">Shutdown</text></g>
+<g class="bad"><rect x="405" y="104" width="105" height="44" rx="4"/><text x="457" y="126" text-anchor="middle" dominant-baseline="central">Work lost</text></g>
+<g class="good"><rect x="525" y="104" width="105" height="44" rx="4"/><text x="577" y="126" text-anchor="middle" dominant-baseline="central">Malware gone</text></g>
+<text class="row-label" x="40" y="181" dominant-baseline="central">Semi-</text>
+<text class="row-label" x="40" y="199" dominant-baseline="central">disposable</text>
+<g class="neutral"><rect x="165" y="168" width="105" height="44" rx="4"/><text x="217" y="190" text-anchor="middle" dominant-baseline="central">Work</text></g>
+<g class="neutral"><rect x="285" y="168" width="105" height="44" rx="4"/><text x="337" y="190" text-anchor="middle" dominant-baseline="central">Shutdown</text></g>
+<g class="good"><rect x="405" y="168" width="105" height="44" rx="4"/><text x="457" y="190" text-anchor="middle" dominant-baseline="central">Work kept</text></g>
+<g class="good"><rect x="525" y="168" width="105" height="44" rx="4"/><text x="577" y="190" text-anchor="middle" dominant-baseline="central">You reset it</text></g>
+</svg>

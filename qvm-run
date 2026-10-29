@@ -1,0 +1,610 @@
+#!/bin/bash
+
+SCRIPTNAME="$(basename "$0")"
+PARENT="$(ps -o comm= -p $PPID)"
+
+# Debugging mode when run from a terminal. From a GUI - show errors as notifications.
+case "$PARENT" in
+	'bash')
+		set -x
+		;;
+
+	'xfce4-panel'|'xfce4-appfinder')
+		notify_title="$*"
+		if (( $(echo "$notify_title" | wc -l) > 1 )); then
+			notify_title="$(echo "$notify_title" | head -n 1) ..."
+		fi
+
+		stderr_file="$(mktemp)"
+		timeout 5 bash -c \
+			"stderr_msg='';
+			 until [ -n \"\$stderr_msg\" ]; do
+			 	stderr_msg=\"\$(cat $stderr_file | grep -E -v '(Warning: locale)|(please wait)|(MESA-INTEL: warning)|(Gtk-CRITICAL)')\";
+			 	sleep 1;
+			 done;
+			 notify-send -- \"$SCRIPTNAME $notify_title\" \"\$stderr_msg\"" &
+
+		"$0" --pass-io "$@" 2>$stderr_file
+		exit $?
+		;;
+esac
+
+# qvm-copy and qvm-move call qvm-run with --pass-io, so stdout is the data channel of the service call.
+# Keep the original stdout on fd 3 for the final qvm-run, and send everything this script prints
+# (logs, trace) to stderr, so it cannot corrupt a transfer.
+exec 3>&1 1>&2
+
+set -euo pipefail
+
+QUBE=""
+OPTIONS=()
+ARGS=()
+
+if [ $# -ge 2 ]; then
+	user_arg=0
+	disp_arg=0
+	options=1
+
+	for arg in "$@"; do
+		if ((options)); then
+			case "$arg" in
+				"--")
+					options=0
+					OPTIONS+=("$arg")
+					continue
+					;;
+
+				"-u")
+					user_arg=1
+					OPTIONS+=("$arg")
+					continue
+					;;
+
+				"--dispvm")
+					disp_arg=1
+					continue
+					;;
+
+				"--dispvm="*)
+					QUBE="${arg#--dispvm=}"
+					OPTIONS+=("--dispvm=$QUBE")
+					continue
+					;;
+
+				"-"*)
+					OPTIONS+=("$arg")
+					continue
+					;;
+			esac
+		fi
+
+		if ((user_arg)); then
+			user_arg=0
+			OPTIONS+=("$arg")
+			continue
+		elif ((disp_arg)); then
+			disp_arg=0
+			QUBE="$arg"
+			OPTIONS+=("--dispvm=$QUBE")
+			continue
+		fi
+
+		if [ -z "$QUBE" ] && [[ "$arg" != "-"* ]]; then
+			QUBE="$arg"
+			continue
+		fi
+
+		ARGS+=("$arg")
+	done
+fi
+
+if [ -z "$QUBE" ]; then
+	echo "No qube chosen."
+fi
+
+klass="$(qvm-prefs "$QUBE" klass)"
+
+# Only AppVMs are wrapped: any other qube class, a DispVM start (--dispvm),
+# a sys- qube or a missing qube name goes straight to the original qvm-run.
+if [ -z "$QUBE" ] || [ "$klass" != "AppVM" ] || [[ " ${OPTIONS[*]} " == *" --dispvm="* ]] || [[ "$QUBE" == "sys-"* ]]; then
+	exec /usr/bin/$SCRIPTNAME "$@" 1>&3 3>&- # Redirect the original stdout (fd 3) to &1 and close fd 3.
+fi
+
+# The copy chosen last, so that a following qvm-copy or qvm-move can target it.
+LAST_QUBE_FILE="$HOME/.cache/last-qvm-copy-qube.txt"
+
+# One marker file per qube; its modification time is when this script last ran a command there.
+LAST_USED_DIR="$HOME/.cache/qvm-run-last-used"
+
+# Remembers when this script last ran a command in the given qube.
+function mark_last_used() {
+	mkdir -p "$LAST_USED_DIR"
+	touch "$LAST_USED_DIR/$1"
+}
+
+# qvm-copy and qvm-move call qvm-run themselves and cannot show the dialog.
+# Within 60 seconds of a choice, redirect them to the copy chosen last
+# (when the requested qube belongs to the same base).
+# TODO: this mechanism will break multiple qvm-run instances running simultaneously
+if [[ "$PARENT" == "qvm-copy"* ]] || [[ "$PARENT" == "qvm-move"* ]]; then
+	if [ -n "$QUBE" ] && [ -f "$LAST_QUBE_FILE" ]; then
+		time_diff=$(( $(date +%s) - $(stat -c %Y "$LAST_QUBE_FILE") ))
+
+		if ((time_diff >= 0 && time_diff <= 60)); then
+			saved_qube="$(cat "$LAST_QUBE_FILE")"
+
+			if [ -n "$saved_qube" ] \
+			&& { [ "${saved_qube::$((${#saved_qube}-1))}" = "$QUBE" ] || [ "$saved_qube" = "${QUBE::$((${#QUBE}-1))}" ] \
+				|| [ "${saved_qube::$((${#saved_qube}-1))}" = "${QUBE::$((${#QUBE}-1))}" ]; }; then
+				echo "$saved_qube" > "$LAST_QUBE_FILE"
+
+				# The qubes.Filecopy call is the last step of a transfer: forget the saved copy after 60 seconds,
+				# or at once when interrupted, so that it is not reused later.
+				if [ $# -eq 6 ] && [ "$1 $2 $3 $4" = "--no-gui --pass-io --service --" ] && [ "$6" = "qubes.Filecopy" ]; then
+					( sleep 60 ; echo > "$LAST_QUBE_FILE" ) &
+					sleep_rm_pid=$!
+					trap 'kill "$sleep_rm_pid" 2>/dev/null || true ; echo > "$LAST_QUBE_FILE"' INT TERM
+				fi
+
+				if [[ " ${OPTIONS[*]} " == *" --dispvm="* ]]; then
+					/usr/bin/$SCRIPTNAME "${OPTIONS[@]}" "${ARGS[@]}" 1>&3 3>&- # Redirect the original stdout (fd 3) to &1 and close fd 3.
+				else
+					mark_last_used "$saved_qube"
+					/usr/bin/$SCRIPTNAME "${OPTIONS[@]}" "$saved_qube" "${ARGS[@]}" 1>&3 3>&- # Redirect the original stdout (fd 3) to &1 and close fd 3.
+				fi
+				exit $?
+			else
+				echo > "$LAST_QUBE_FILE"
+			fi
+		fi
+	fi
+fi
+
+function zenity_log() {
+	echo "zenity: The user chose to $*"
+}
+
+function list_copies() {
+	local base="$1"
+	qvm-ls --raw-list | grep -E "^${base}[0-9]\$" || true
+}
+
+function qube_exists() {
+	qvm-ls --raw-list | grep -Fxq "$1"
+}
+
+function is_halted() {
+	qvm-ls --halted --raw-list | grep -Fxq "$1"
+}
+
+# Prints the first free copy name after the highest used suffix,
+# skipping existing qubes and names passed as already taken.
+function next_free_copy_name() {
+	local base="$1"
+	shift
+	
+	local taken_names=" $* "
+	local highest_suffix=0
+	
+	local copy
+	local attempt
+	local candidate
+
+	for copy in $(list_copies "$base") "$@"; do
+		if ((${copy: -1} > highest_suffix)); then
+			highest_suffix="${copy: -1}"
+		fi
+	done
+
+	for ((attempt = 1; attempt <= 10; attempt++)); do
+		candidate="$base$(((highest_suffix + attempt) % 10))"
+	
+		if ! qube_exists "$candidate" && [[ "$taken_names" != *" $candidate "* ]]; then
+			echo "$candidate"
+			return 0
+		fi
+	done
+	
+	return 1
+}
+
+# Moves one 0-255 value towards target color's RGB.
+function shift255() {
+	local channel_value="$1"
+	local target_value="$2"
+	local numerator="$3"
+	local denominator="$4"
+	
+	echo $(( channel_value + (target_value - channel_value) * numerator / denominator ))
+}
+
+# Prints 0xRRGGBB of shade number 4-7 of a base color (same formula as the qubes-label-tt.sh generator).
+# Shades 4 and 5 are lighter (towards white), 6 and 7 are darker (towards black).
+function compute_shade_color() {
+	local base_color_hex="${1#0x}"
+	local shade_number="$2"
+	local shade_steps_denominator=6
+	
+	local -A shade_targets=([4]=255 [5]=255 [6]=0 [7]=0)
+	local -A shade_steps=([4]=2 [5]=1 [6]=1 [7]=2)
+	
+	local target="${shade_targets[$shade_number]}"
+	local step="${shade_steps[$shade_number]}"
+	
+	local offset
+	local result="0x"
+
+	for offset in 0 2 4; do
+		result+="$(printf '%02x' "$(shift255 "$((16#${base_color_hex:offset:2}))" "$target" "$step" "$shade_steps_denominator")")"
+	done
+	
+	echo "$result"
+}
+
+function ensure_shade_label_exists() {
+	local base_label="$1"
+	local shade_number="$2"
+	local shade_label="$base_label$shade_number"
+	local base_color
+
+	if qubes-label-tt --raw-data get "$shade_label" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	base_color="$(qubes-label-tt --raw-data get "$base_label")"
+	notify-send "qubes-label-tt" "Creating label '$shade_label'..."
+	qubes-label-tt --assume-yes create "$shade_label" "$(compute_shade_color "$base_color" "$shade_number")" >/dev/null
+}
+
+# Gives copies alternating lighter/darker shades of the base qube's label,
+# chosen by whether the copy's trailing digit is even or odd.
+function apply_copy_shade_label() {
+	local base="$1"
+	local copy="$2"
+	local shade_numbers=(5 6)
+	local shade_number="${shade_numbers[$(( ${copy: -1} % ${#shade_numbers[@]} ))]}"
+	local base_label
+
+	base_label="$(qvm-prefs "$base" label)"
+
+	if ensure_shade_label_exists "$base_label" "$shade_number" \
+	&& qvm-prefs "$copy" label "$base_label$shade_number"; then
+		notify-send "qvm-prefs" "Set the label of '$copy' to '$base_label$shade_number'."
+	else
+		notify-send "qvm-prefs" "Could not set label '$base_label$shade_number', '$copy' keeps '$base_label'."
+	fi
+}
+
+function qube_state() {
+	if is_halted "$1"; then
+		echo "halted"
+	else
+		echo "running"
+	fi
+}
+
+function last_used_text() {
+	local marker_file="$LAST_USED_DIR/$1"
+
+	if [ -f "$marker_file" ]; then
+		date -r "$marker_file" '+%Y-%m-%d %H:%M'
+	else
+		echo "unknown"
+	fi
+}
+
+# Prints action ids available for a qube, one per line.
+function list_actions() {
+	local base="$1"
+	local qube="$2"
+	local state="$3"
+
+	if [ "$qube" = "$base" ]; then
+		printf '%s\n' run_base clone
+	elif [ "$state" = "running" ]; then
+		printf '%s\n' run_clone stop_delete_clone
+	else
+		printf '%s\n' run_clone delete_clone delete
+	fi
+}
+
+function action_label() {
+	local action="$1"
+	local clone_name="$2"
+
+	case "$action" in
+		"run_base")
+			echo $'\xe2\x9a\xa0\xef\xb8\x8f'" Run (not recommended)"
+			;;
+ 
+		"clone")
+			echo $'\xf0\x9f\xa7\xac'" Clone to a new copy ($clone_name)"
+			;;
+ 
+		"run_clone")
+			echo $'\xe2\x86\xaa\xef\xb8\x8f'" Run in this clone"
+			;;
+ 
+		"stop_delete_clone")
+			echo $'\xf0\x9f\x9b\x91'" Stop, delete, then clone to a new copy ($clone_name)"
+			;;
+ 
+		"delete_clone")
+			echo $'\xf0\x9f\xa7\xac'" Delete, then clone to a new copy ($clone_name)"
+			;;
+ 
+		"delete")
+			echo $'\xf0\x9f\x97\x91\xef\xb8\x8f'" Delete only"
+			;;
+	esac
+}
+
+function describe_action() {
+	local base="$1"
+	local qube="$2"
+	local action="$3"
+	local new_copy="$4"
+
+	case "$action" in
+		"run_base"|"run_clone")
+			echo "run '${ARGS[*]}' in '$qube'."
+			;;
+ 
+		"clone")
+			echo "clone '$base' to a new qube: '$new_copy', and run '${ARGS[*]}' in there."
+			;;
+ 
+		"stop_delete_clone")
+			echo "stop and delete '$qube', clone '$base' to a new qube: '$new_copy', and run '${ARGS[*]}' in there."
+			;;
+ 
+		"delete_clone")
+			echo "delete '$qube', clone '$base' to a new qube: '$new_copy', and run '${ARGS[*]}' in there."
+			;;
+ 
+		"delete")
+			echo "delete '$qube'."
+			;;
+	esac
+}
+
+function is_cloning_action() {
+	local action="$1"
+	[[ "$action" == "clone" || "$action" == "stop_delete_clone" || "$action" == "delete_clone" ]]
+}
+
+# Shows the form with one combo per qube; fills the named array with "qube:action" entries.
+# Returns non-zero when the form was cancelled or timed out.
+function choose_copy_actions() {
+	local title="$1"
+	local base="$2"
+	local -n out_actions="$3"
+
+	local qubes=("$base")
+	local copies=()
+	local -A states=()
+	local form_arguments=()
+	local chosen_labels=()
+	local form_output
+	
+	local dialog_text="Create a copy of '$base'?"
+	local clone_name
+	local combo_values
+	local qube
+	local action
+	local index
+
+	mapfile -t copies < <(list_copies "$base")
+	qubes+=("${copies[@]}")
+
+	if ((${#copies[@]} > 0)); then
+		dialog_text="Copies of '$base' exist. Pick actions:"
+	fi
+
+	clone_name="$(next_free_copy_name "$base")" || clone_name="no free name"
+
+	for qube in "${qubes[@]}"; do
+		states[$qube]="$(qube_state "$qube")"
+		combo_values=""
+		
+		for action in $(list_actions "$base" "$qube" "${states[$qube]}"); do
+			combo_values+="|$(action_label "$action" "$clone_name")"
+		done
+		
+		form_arguments+=(--add-combo="$qube"$'\n'"(${states[$qube]}, last used: $(last_used_text "$qube"))" --combo-values="$combo_values")
+	done
+
+	form_output="$(zenity --forms \
+		--title="$title" \
+		--text="$dialog_text" \
+		--separator=";" \
+		"${form_arguments[@]}" \
+		--ok-label=$'\xe2\x9c\x85'" Do it" --cancel-label=$'\xe2\x9d\x8c'" Cancel" \
+		--width=560 --timeout=60 2>/dev/null)" || return 1
+
+	# The form prints one chosen text per qube, in the same order as the qubes; turn them back into actions.
+	IFS=";" read -r -a chosen_labels <<< "$form_output"
+
+	for index in "${!qubes[@]}"; do
+		qube="${qubes[$index]}"
+		
+		for action in $(list_actions "$base" "$qube" "${states[$qube]}"); do
+			if [ "$(action_label "$action" "$clone_name")" = "${chosen_labels[$index]:-}" ]; then
+				out_actions+=("$qube:$action")
+			fi
+		done
+	done
+}
+
+# Shuts a qube down, waiting up to 60 seconds, and kills it if it does not stop.
+function stop_qube() {
+	local qube="$1"
+
+	notify-send "qvm-shutdown" "Stopping '$qube'..."
+	qvm-shutdown --wait --timeout 60 "$qube" || qvm-kill "$qube"
+}
+
+# Deletes a copy together with its last-used marker.
+function remove_copy() {
+	local copy="$1"
+
+	notify-send "qvm-remove" "Removing '$copy'..."
+	qvm-remove --force "$copy"
+	rm -f "$LAST_USED_DIR/$copy"
+}
+
+# Clones the base into a new copy: sets its shade label (when qubes-label-tt is available),
+# restores the default NetVM and removes its app menu entries.
+function clone_copy() {
+	local base="$1"
+	local new_copy="$2"
+
+	# Take the network away from the base before cloning, so the base stays offline.
+	qvm-prefs "$base" netvm None
+
+	notify-send "qvm-clone" "Cloning '$base' into '$new_copy' with netvm=Default..."
+	qvm-clone "$base" "$new_copy"
+
+	if command -v qubes-label-tt >/dev/null 2>&1; then
+		apply_copy_shade_label "$base" "$new_copy"
+	fi
+	
+	qvm-prefs "$new_copy" netvm -D
+	qvm-appmenus --remove "$new_copy"
+}
+
+# Allows file copies only into the given copies (after asking), never into the base.
+# Rewrites the policy file of the base, so it lists only the copies created by this run.
+function write_filecopy_policy() {
+	local base="$1"
+	shift
+	
+	local policy_file="/etc/qubes/policy.d/10-filecopy-$base.policy"
+	local new_copy
+
+	: > "$policy_file"
+	
+	for new_copy in "$@"; do
+		echo -e "qubes.Filecopy\t*\t@anyvm\t$new_copy\task" >> "$policy_file"
+	done
+	
+	echo -e "qubes.Filecopy\t*\t@anyvm\t$base\tdeny" >> "$policy_file"
+}
+
+# Executes "qube:action" entries; appends qubes to run the command in to the named array.
+function execute_copy_actions() {
+	local base="$1"
+	local -n in_actions="$2"
+	local -n out_run_targets="$3"
+
+	local -A new_copy_for=()
+	local new_copies=()
+	
+	local entry
+	local qube
+	local action
+
+	# Names are allocated before any removal, so they match the names shown in the form.
+	for entry in "${in_actions[@]}"; do
+		qube="${entry%%:*}"
+		action="${entry#*:}"
+
+		if is_cloning_action "$action"; then
+			new_copy_for[$qube]="$(next_free_copy_name "$base" "${new_copies[@]}")"
+			new_copies+=("${new_copy_for[$qube]}")
+		fi
+	done
+
+	for entry in "${in_actions[@]}"; do
+		qube="${entry%%:*}"
+		action="${entry#*:}"
+		zenity_log "$(describe_action "$base" "$qube" "$action" "${new_copy_for[$qube]:-}")"
+
+		case "$action" in
+			run_base|run_clone)
+				out_run_targets+=("$qube")
+				;;
+
+			clone)
+				clone_copy "$base" "${new_copy_for[$qube]}"
+				out_run_targets+=("${new_copy_for[$qube]}")
+				;;
+
+			stop_delete_clone)
+				stop_qube "$qube"
+				remove_copy "$qube"
+				clone_copy "$base" "${new_copy_for[$qube]}"
+				out_run_targets+=("${new_copy_for[$qube]}")
+				;;
+
+			delete_clone)
+				remove_copy "$qube"
+				clone_copy "$base" "${new_copy_for[$qube]}"
+				out_run_targets+=("${new_copy_for[$qube]}")
+				;;
+
+			delete)
+				remove_copy "$qube"
+				;;
+		esac
+	done
+
+	if ((${#new_copies[@]} > 0)); then
+		write_filecopy_policy "$base" "${new_copies[@]}"
+	fi
+}
+
+# Runs the command in every target: all but the last in the background, the last via exec.
+# Saves the last target in LAST_QUBE_FILE for a following qvm-copy or qvm-move.
+function run_in_targets() {
+	local base="$1"
+	shift
+	local last_target="${!#}"
+	local target
+
+	echo "$last_target" > "$LAST_QUBE_FILE"
+
+	for target in "${@:1:$#-1}"; do
+		mark_last_used "$target"
+		/usr/bin/$SCRIPTNAME "${OPTIONS[@]}" "$target" "${ARGS[@]}" 1>&3 3>&- & # Redirect the original stdout (fd 3) to &1 and close fd 3.
+	done
+
+	mark_last_used "$last_target"
+	exec /usr/bin/$SCRIPTNAME "${OPTIONS[@]}" "$last_target" "${ARGS[@]}" 1>&3 3>&- # Redirect the original stdout (fd 3) to &1 and close fd 3.
+}
+
+run_targets=()
+
+# Run directly in the given qube when it is not a plain AppVM, is a template for DispVMs or is already running.
+# Otherwise ask the user what to do with the base and its copies.
+if [ "$(qvm-prefs "$QUBE" klass)" != "AppVM" ] || [[ " ${OPTIONS[*]} " == *" --dispvm="* ]] \
+|| [ "$(qvm-prefs "$QUBE" template_for_dispvms)" = "True" ] \
+|| (qvm-ls | grep -E 'Transient|Running'| grep -Eq "^$QUBE "); then
+	run_targets=("$QUBE")
+else
+	# A qube named like a base plus one digit is a copy: act on its base.
+	if [[ "$QUBE" =~ [0-9]$ ]] && qube_exists "${QUBE::-1}"; then
+		QUBE="${QUBE::-1}"
+	fi
+
+	chosen_actions=()
+	if ! choose_copy_actions "$SCRIPTNAME $(echo "$*" | head)" "$QUBE" chosen_actions; then
+		zenity_log "cancel running '${ARGS[*]}', therefore qvm-copy should stop now too."
+		exit 1
+	fi
+
+	execute_copy_actions "$QUBE" chosen_actions run_targets
+fi
+
+# Nothing to run in (for example only deletions were chosen): exit non-zero, so a calling qvm-copy stops too.
+if ((${#run_targets[@]} == 0)); then
+	zenity_log "not run '${ARGS[*]}' anywhere, therefore qvm-copy should stop now too."
+	exit 1
+fi
+
+if [[ " ${OPTIONS[*]} " == *" --dispvm="* ]]; then
+	echo "${run_targets[-1]}" > "$LAST_QUBE_FILE"
+	exec /usr/bin/$SCRIPTNAME "${OPTIONS[@]}" "${ARGS[@]}" 1>&3 3>&- # Redirect the original stdout (fd 3) to &1 and close fd 3.
+fi
+
+run_in_targets "$QUBE" "${run_targets[@]}"
