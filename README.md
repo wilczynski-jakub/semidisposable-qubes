@@ -1,16 +1,12 @@
 # Semidisposable VMs: extra security layer for Qubes OS
 
 <details>
-<summary><h3><b>What is Qubes OS?</b> <img src="https://raw.githubusercontent.com/QubesOS/qubes-artwork/7e2d85510d90f02a85c560a81cac31b3e8576390/logo/qubes-logo-blue.svg" alt="Qubes OS logo" width="28"></h3></summary>
+<summary><h2><b>What is Qubes OS?</b></h2></summary>
 
 > Qubes OS is a security-focused desktop operating system that aims to provide security through compartmentalization.
 > <br/><sub>[Wikipedia](https://en.wikipedia.org/wiki/Qubes_OS)</sub>
 
-<br/>
-
 ![Windows of different qubes with colored frames](https://doc.qubes-os.org/en/r4.3/_images/r4.0-password-prompt.png)<br/><sub><i>Each qube's windows get a frame in its label's color. Source: <a href="https://doc.qubes-os.org/en/r4.3/introduction/screenshots.html">Qubes OS documentation</a></i></sub>
-
-<br/>
 
 Qubes OS encourages you to divide your computer work into isolated VMs of different types, called **qubes**, for example:
 
@@ -18,6 +14,11 @@ Qubes OS encourages you to divide your computer work into isolated VMs of differ
 - <img src="https://raw.githubusercontent.com/QubesOS/qubes-artwork/7e2d85510d90f02a85c560a81cac31b3e8576390/icons/scalable/apps/dispvm-orange.svg" alt="DispVM icon" width="20"> **DispVM**: a disposable qube; each shutdown wipes out all changes in its filesystem.
 
 </details>
+
+
+
+<details open>
+<summary><h2>Motivation for this repo</h2></summary>
 
 ### The problem with AppVMs <img src="https://raw.githubusercontent.com/QubesOS/qubes-artwork/7e2d85510d90f02a85c560a81cac31b3e8576390/icons/scalable/apps/appvm-orange.svg" alt="AppVM icon" width="28">
 
@@ -39,10 +40,12 @@ In practice:
 - When you choose to work in a **clone** of an AppVM, the base AppVM stays untouched.
 - The clone keeps its state across shutdowns, so local work survives (exactly as in AppVMs).
 - At any time, you can **delete and re-clone** the clone. Everything that happened inside the old clone is wiped out (exactly as in DispVMs).
+</details>
 
 
 
-## [qvm-run](qvm-run)
+<details open>
+<summary><h2><a href="qvm-run">qvm-run</a></h2></summary>
 
 `qvm-run` is a wrapper around `/usr/bin/qvm-run` that makes this workflow the default. Because it has the same name and comes first in your `PATH`, it also handles apps started from the GUI (app menu, app finder), not only from the terminal. When you start an app in an AppVM, a dialog lets you choose what to do:
 
@@ -110,3 +113,4 @@ sudo install -m 755 ./qvm-run /usr/local/bin/qvm-run
 ### License
 
 Icons from [Qubes OS artwork](https://github.com/QubesOS/qubes-artwork) (The Invisible Things Lab), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Action icons are the emoji used in the `qvm-run` dialog, from [Noto Emoji](https://github.com/googlefonts/noto-emoji) (Apache License 2.0).
+</details>
