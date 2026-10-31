@@ -34,7 +34,7 @@ What if we could still have the convenience of *not having to think about backin
 
 ![AppVM vs DispVM vs semidisposable VM](images/vm-lifecycle.svg)
 
-In practice:
+#### In practice:
 
 - Each AppVM (except for the `sys-` qubes) becomes a *semidisposable VM* (but you can add your custom exceptions).
 - When you choose to work in a **clone** of an AppVM, the base AppVM stays untouched.
@@ -70,7 +70,7 @@ In practice:
 </tr>
 </table>
 
-Other details:
+#### Other details:
 
 - New copies get a shade of the base qube's label, so you can tell them apart at a glance.
 - Copies get network access through their default NetVM, the base qube is set to offline.
