@@ -1,7 +1,7 @@
-# Semidisposable VMs: extra security layer for Qubes OS
+# Semidisposable VMs: extra security layer in *Qubes OS*
 
 <details>
-<summary><h2><b>What is Qubes OS?</b></h2></summary>
+<summary><h2><b>What is <i>Qubes OS?</i></b></h2></summary>
 
 > Qubes OS is a security-focused desktop operating system that aims to provide security through compartmentalization.
 > <br/><sub>[Wikipedia](https://en.wikipedia.org/wiki/Qubes_OS)</sub>
